@@ -334,15 +334,21 @@ func (ec *Client) getBlock(
 		return nil, nil, err
 	}
 
-	blockAuthor, err := ec.blockAuthor(ctx, head.Number.Int64())
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: could not get block author for %x", err, body.Hash[:])
-	}
+	doneAuthor := make(chan bool, 1)
+	var blockAuthor *RosettaTypes.AccountIdentifier
+	var errAuthor error
+	go func() {
+		blockAuthor, errAuthor = ec.blockAuthor(ctx, head.Number.Int64())
+		doneAuthor <- true
+	}()
 
-	receipts, err := ec.getBlockReceipts(ctx, body.Hash, body.Transactions)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: could not get receipts for %x", err, body.Hash[:])
-	}
+	doneReceipts := make(chan bool, 1)
+	var receipts []*types.Receipt
+	var errReceipts error
+	go func() {
+		receipts, errReceipts = ec.getBlockReceipts(ctx, body.Hash, body.Transactions)
+		doneReceipts <- true
+	}()
 
 	// Get block traces (not possible to make idempotent block transaction trace requests)
 	//
@@ -358,6 +364,16 @@ func (ec *Client) getBlock(
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: could not get traces for %x", err, body.Hash[:])
 		}
+	}
+
+	<-doneAuthor
+	if errAuthor != nil {
+		return nil, nil, fmt.Errorf("%w: could not get block author for %x", errAuthor, body.Hash[:])
+	}
+
+	<-doneReceipts
+	if errReceipts != nil {
+		return nil, nil, fmt.Errorf("%w: could not get receipts for %x", errReceipts, body.Hash[:])
 	}
 
 	// Convert all txs to loaded txs
